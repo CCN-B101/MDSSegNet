@@ -1,0 +1,1 @@
+python Batch_Prediction.py --image C:\\Users\\Administrator\\Desktop\\Ctc\\1 --weight F:\\Crack_project\\SCDN14\\checkpoints\\Cracknex_Deepcrack_0.8387.pth --save-dir C:\\Users\\Administrator\\Desktop\\Ctc\\2

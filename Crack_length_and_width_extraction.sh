@@ -1,0 +1,1 @@
+python Crack_length_and_width_extraction.py --image /home/test/CCN/004.jpg --weight /home/test/CCN/SCDN14/checkpoints/best_mIoU_resnet101_0.8164.pth --backbone resnet101 --crop-size 448 --overlap 0.2 --save-dir /home/test/CCN/SCDN14/results --roi 753 271 1852 3789 --output-file results.txt
