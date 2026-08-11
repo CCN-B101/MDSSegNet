@@ -1,0 +1,54 @@
+name: Add pretrained weights to repository
+
+on:
+  push:
+    branches:
+      - add-pretrained-weights
+    paths:
+      - .github/workflows/add-pretrained-weights.yml
+
+permissions:
+  contents: write
+
+jobs:
+  add-weights:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out upload branch
+        uses: actions/checkout@v4
+        with:
+          ref: add-pretrained-weights
+
+      - name: Download released weights
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p checkpoints
+          gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "Crack500_best_mIoU.pth" --dir checkpoints --clobber
+          gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "CTC_best_mIoU.pth" --dir checkpoints --clobber
+          gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "DeepCrack_best_0.9031.pth" --dir checkpoints --clobber
+          mv checkpoints/DeepCrack_best_0.9031.pth checkpoints/DeepCrack_best_mIoU.pth
+
+      - name: Verify file integrity
+        run: |
+          echo "93a8309346291e5261dbb9760546273de3bcc7b6f799960e777602991c8d3de5  checkpoints/Crack500_best_mIoU.pth" | sha256sum -c -
+          echo "02eeb12acc8f2a3f1552d988308ef21faac6459c6937d52c33a007f317bf51d0  checkpoints/CTC_best_mIoU.pth" | sha256sum -c -
+          echo "6ee0291290e456ee225b5a414ef6c475cac9730fa934bcaedf9258288405a06c  checkpoints/DeepCrack_best_mIoU.pth" | sha256sum -c -
+
+      - name: Track published weights
+        run: |
+          if ! grep -qxF "!checkpoints/" .gitignore; then
+            cat >> .gitignore <<'EOF'
+
+          # Published pretrained weights kept in this repository
+          !checkpoints/
+          !checkpoints/Crack500_best_mIoU.pth
+          !checkpoints/CTC_best_mIoU.pth
+          !checkpoints/DeepCrack_best_mIoU.pth
+          EOF
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .gitignore checkpoints/Crack500_best_mIoU.pth checkpoints/CTC_best_mIoU.pth checkpoints/DeepCrack_best_mIoU.pth
+          git commit -m "Add pretrained MDSSegNet weights"
+          git push origin HEAD:add-pretrained-weights
