@@ -235,232 +235,407 @@
 #         raise ValueError("Unexpected crack_mask shape, please check the input dimensions")
 #
 #     # 连通组件标记
-#     labem���-�G����ƭy�eval()
-    metric = mIOU(num_classes=2)
-    preds_all, gts_all = [], []
+#     labeled_mask = label(crack_mask_cpu)  # 标记每个裂缝
+#     num_labels = np.max(labeled_mask)  # 获取标记的数量（即裂缝的数量）
+#     crack_count = num_labels  # 记录裂缝数量
+#
+#     for label_id in range(1, num_labels + 1):
+#         # 获取当前裂缝的二值掩码
+#         pred_mask = (labeled_mask == label_id).astype(np.uint8)
+#
+#         # 计算该裂缝的长度和宽度
+#         length, width = calculate_crack_length_and_width(pred_mask)
+#         crack_length_list.append(length)
+#         crack_width_list.append(width)
+#
+#     return crack_length_list, crack_width_list, crack_count
+#
+#
+#
+# #  === 滑窗预测函数，限制 ROI 范围 ===
+# # 在原代码的基础上进行修改
+# def sliding_window_predict_roi(model, img_tensor, roi_coords, window_size=448, overlap=0.2, cls=1,
+#                                save_blocks_dir=None):
+#     _, _, H, W = img_tensor.shape
+#     x1, y1, x2, y2 = roi_coords
+#     roi_w, roi_h = x2 - x1, y2 - y1
+#     stride = int(window_size * (1 - overlap))
+#
+#     final_mask = np.zeros((H, W), dtype=np.uint8)
+#
+#     model.eval()
+#     with torch.no_grad():
+#         block_idx = 0  # 计数滑窗块
+#         # 从ROI的左上角开始，按照固定步长滑动窗口
+#         for top in range(y1, y2, stride):
+#             for left in range(x1, x2, stride):
+#                 # 确保窗口大小为window_size，即使在边界处也要保持大小一致
+#                 bottom = min(top + window_size, y2)
+#                 right = min(left + window_size, x2)
+#
+#                 crop = img_tensor[:, :, top:bottom, left:right]
+#                 pad_bottom = window_size - crop.shape[2]
+#                 pad_right = window_size - crop.shape[3]
+#                 if pad_bottom > 0 or pad_right > 0:
+#                     crop = F.pad(crop, (0, pad_right, 0, pad_bottom), mode="constant", value=0)
+#
+#                 # 仅使用查询图像进行推理
+#                 pred = model(crop)  # 模型的前向推理
+#                 pred = torch.argmax(pred, dim=1)
+#                 pred_crop = pred[:, :bottom - top, :right - left].squeeze(0).cpu().numpy()
+#                 pred_crop_bin = (pred_crop == cls).astype(np.uint8) * 255
+#
+#                 # 保存单独的mask
+#                 if save_blocks_dir:
+#                     block_mask = Image.fromarray(pred_crop_bin)
+#                     block_mask.save(os.path.join(save_blocks_dir, f"block_{block_idx}_{top}_{left}.png"))
+#
+#                     # 生成对比图：裁剪后的原图和彩色掩码对比
+#                     orig_crop = img_tensor[0, :, top:bottom, left:right]  # [3,H,W]
+#                     orig_crop_np = (orig_crop.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+#                     orig_crop_np = orig_crop_np[:bottom - top, :right - left, :]
+#
+#                     # 创建黑白掩码
+#                     pred_color = np.stack([pred_crop_bin[:bottom - top, :right - left]] * 3, axis=-1)
+#
+#                     # 拼接原图裁剪部分（彩色）和预测结果（黑白掩膜）对比
+#                     compare = np.concatenate([orig_crop_np, pred_color], axis=1)
+#                     compare_pil = Image.fromarray(compare)
+#                     compare_pil.save(os.path.join(save_blocks_dir, f"compare_{block_idx}_{top}_{left}.png"))
+#
+#                 block_idx += 1
+#
+#                 final_mask[top:bottom, left:right] = np.maximum(
+#                     final_mask[top:bottom, left:right],
+#                     pred_crop_bin[:bottom - top, :right - left]
+#                 )
+#
+#     return final_mask
+#
+#
+# # === 主程序入口 ===
+# def main():
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--image', type=str, required=True, help='输入图像路径')
+#     parser.add_argument('--weight', type=str, required=True, help='模型权重路径')
+#     parser.add_argument('--backbone', type=str, default='resnet101')
+#     parser.add_argument('--crop-size', type=int, default=448)
+#     parser.add_argument('--overlap', type=float, default=0.2)
+#     parser.add_argument('--save-dir', type=str, default='results/single_prediction')
+#     parser.add_argument('--roi', type=int, nargs=4, metavar=('x1', 'y1', 'x2', 'y2'),
+#                         default=None, help='仅在指定 ROI 区域滑窗预测')
+#     parser.add_argument('--save-blocks-dir', type=str, default='roi_blocks', help='保存每个滑窗掩码和对比图的目录')
+#     parser.add_argument('--output-file', type=str, default='crack_results.txt', help='保存裂缝数量、长度和宽度的文本文件')
+#     args = parser.parse_args()
+#
+#     os.makedirs(args.save_dir, exist_ok=True)
+#     os.makedirs(args.save_blocks_dir, exist_ok=True)
+#
+#     # === 加载模型 ===
+#     model = CrackNex(backbone=args.backbone)
+#     model.load_state_dict(torch.load(args.weight, map_location='cuda'), strict=False)
+#     model = model.cuda().eval()
+#
+#     # === 加载图像 ===
+#     img_tensor, orig_pil = load_image(args.image)
+#     img_tensor = img_tensor.cuda()
+#     orig_np = np.array(orig_pil.convert("RGB"))
+#
+#     # === 滑窗预测（是否启用 ROI） ===
+#     if args.roi:
+#         x1, y1, x2, y2 = args.roi
+#         print(f"ROI 限定区域: 左上({x1},{y1})，右下({x2},{y2})")
+#         pred_mask_np = sliding_window_predict_roi(
+#             model, img_tensor,
+#             roi_coords=(x1, y1, x2, y2),
+#             window_size=args.crop_size, overlap=args.overlap,
+#             save_blocks_dir=args.save_blocks_dir  # 保存每个滑窗的掩码和对比图
+#         )
+#     else:
+#         pred_mask_np = sliding_window_predict_roi(
+#             model, img_tensor,
+#             roi_coords=(0, 0, img_tensor.shape[3], img_tensor.shape[2]),
+#             window_size=args.crop_size, overlap=args.overlap,
+#             save_blocks_dir=args.save_blocks_dir  # 保存每个滑窗的掩码和对比图
+#         )
+#
+#     # === 保存掩码图像 ===
+#     basename = os.path.splitext(os.path.basename(args.image))[0]
+#     pred_path = os.path.join(args.save_dir, f"pred_{basename}.png")
+#     Image.fromarray(pred_mask_np).save(pred_path)
+#
+#     # === 绘制蓝色覆盖裂缝区域 ===
+#     overlay_img = orig_np.copy()
+#     overlay_img[pred_mask_np > 0] = [0, 0, 255]  # 用蓝色覆盖裂缝区域
+#
+#     overlay_path = os.path.join(args.save_dir, f"overlay_{basename}.png")
+#     Image.fromarray(overlay_img).save(overlay_path)
+#
+#     # === 计算裂缝长度、宽度和数量 ===
+#     crack_length, crack_width, crack_count = process_predictions(pred_mask_np)
+#
+#     # === 输出计算结果 ===
+#     print(f"裂缝数量: {crack_count}")
+#     print(f"裂缝长度: {crack_length}")
+#     print(f"裂缝宽度: {crack_width}")
+#
+#     # === 保存裂缝数据到文本文件 ===
+#     output_file = os.path.join(args.save_dir, args.output_file)
+#     with open(output_file, 'w') as f:
+#         f.write(f"裂缝数量: {crack_count}\n")
+#         f.write(f"裂缝长度: {crack_length}\n")
+#         f.write(f"裂缝宽度: {crack_width}\n")
+#
+#     # === 保存带有标注的图像 ===
+#     final_image_path = os.path.join(args.save_dir, f"labeled_{basename}.png")
+#     Image.fromarray(overlay_img).save(final_image_path)
+#
+#     print(f"✅ 预测完成：\n- 掩码图：{pred_path}\n- 可视化图：{overlay_path}\n- 裂缝数据：{output_file}")
+#
+#
+# if __name__ == '__main__':
+#     main()
 
+
+
+
+#  三
+# 整幅图像裂缝宽度、长度数量检测并保存（带编号叠加）用 Zhang–Suen 细化（thin()）做骨架，再用骨架像素数作为长度。
+import os
+import torch
+import numpy as np
+from PIL import Image
+import argparse
+import cv2
+from model.cracknex import CrackNex  # 使用你的模型结构定义文件路径
+import torch.nn.functional as F
+from torchvision.transforms import ToTensor, Compose
+import torchvision.transforms.functional as TF
+from skimage.morphology import skeletonize  # 用于细化裂缝区域
+from skimage.measure import label  # 用于连通组件标记
+
+
+# === 自定义图像归一化（仅图像，不需要 mask） ===
+def normalize_only_img(img):
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    return TF.normalize(ToTensor()(img), mean=mean, std=std)
+
+
+# === 加载图像并归一化 ===
+def load_image(path):
+    img = Image.open(path)  # 保留原始格式
+    transform = Compose([normalize_only_img])
+    tensor = transform(img).unsqueeze(0)
+    return tensor, img
+
+
+# === 计算裂缝的长度和宽度 ===
+def calculate_crack_length_and_width(pred_mask):
+    """
+    pred_mask: 二值掩码(0/1)，单个连通域
+    返回: (骨架像素数, 距离变换最大值)
+    """
+    skeleton = skeletonize(pred_mask.astype(np.uint8)).astype(np.uint8)
+    crack_length = np.sum(skeleton)  # 骨架像素数
+    # 距离变换用0/1更稳
+    distance_transform = cv2.distanceTransform(pred_mask.astype(np.uint8), cv2.DIST_L2, 5)
+    crack_width = float(np.max(distance_transform))
+    return crack_length, crack_width
+
+
+# === 连通组件标记，返回裂缝的数量和每条裂缝的度量 + 编号图 ===
+def process_predictions(crack_mask):
+    crack_length_list = []
+    crack_width_list = []
+
+    print(f"crack_mask shape: {crack_mask.shape}")
+
+    if len(crack_mask.shape) == 4:
+        crack_mask_cpu = crack_mask[0].cpu().numpy()
+    elif len(crack_mask.shape) == 3:
+        crack_mask_cpu = crack_mask.cpu().numpy()
+    elif len(crack_mask.shape) == 2:
+        crack_mask_cpu = crack_mask
+    else:
+        raise ValueError("Unexpected crack_mask shape")
+
+    # 若输入是0/255，将其规整为0/1（label对0/255也能工作，但后续距离变换更稳）
+    if crack_mask_cpu.max() > 1:
+        crack_mask_cpu = (crack_mask_cpu > 0).astype(np.uint8)
+
+    # 连通域编号图: 0为背景，1..N为各裂缝
+    labeled_mask = label(crack_mask_cpu, connectivity=2)
+    num_labels = int(labeled_mask.max())
+
+    for label_id in range(1, num_labels + 1):
+        pred_mask = (labeled_mask == label_id).astype(np.uint8)
+        length, width = calculate_crack_length_and_width(pred_mask)
+        crack_length_list.append(int(length))
+        crack_width_list.append(float(width))
+
+    crack_count = num_labels
+    # 现在额外返回 labeled_mask 用于可视化编号
+    return crack_length_list, crack_width_list, crack_count, labeled_mask
+
+
+#  === 滑窗预测函数，限制 ROI 范围 ===
+def sliding_window_predict_roi(model, img_tensor, roi_coords, window_size=448, overlap=0.2, cls=1,
+                               save_blocks_dir=None):
+    _, _, H, W = img_tensor.shape
+    x1, y1, x2, y2 = roi_coords
+    stride = int(window_size * (1 - overlap))
+
+    final_mask = np.zeros((H, W), dtype=np.uint8)
+
+    model.eval()
     with torch.no_grad():
-        for img, mask in tqdm(dataloader, desc="Validating", leave=False):
-            img = img.cuda(non_blocking=True)
-            mask = mask.cuda(non_blocking=True)
+        block_idx = 0
+        for top in range(y1, y2, stride):
+            for left in range(x1, x2, stride):
+                bottom = min(top + window_size, y2)
+                right = min(left + window_size, x2)
 
-            out = model(img)[0]
-            pred = torch.argmax(out, dim=1)
+                crop = img_tensor[:, :, top:bottom, left:right]
+                pad_bottom = window_size - crop.shape[2]
+                pad_right = window_size - crop.shape[3]
+                if pad_bottom > 0 or pad_right > 0:
+                    crop = F.pad(crop, (0, pad_right, 0, pad_bottom), mode="constant", value=0)
 
-            pred_np = pred.cpu().numpy()
-            gt_np = mask.cpu().numpy()
-            preds_all.append(pred_np)
-            gts_all.append(gt_np)
-            metric.add_batch(pred_np, gt_np)
+                pred = model(crop)
+                pred = torch.argmax(pred, dim=1)
+                pred_crop = pred[:, :bottom - top, :right - left].squeeze(0).cpu().numpy()
+                pred_crop_bin = (pred_crop == cls).astype(np.uint8) * 255
 
-    miou, class_ious = metric.evaluate(return_class_iou=True)
+                if save_blocks_dir:
+                    os.makedirs(save_blocks_dir, exist_ok=True)
+                    block_mask = Image.fromarray(pred_crop_bin)
+                    block_mask.save(os.path.join(save_blocks_dir, f"block_{block_idx}_{top}_{left}.png"))
 
-    preds_np = np.concatenate(preds_all, axis=0).reshape(-1)
-    gts_np = np.concatenate(gts_all, axis=0).reshape(-1)
-    precision, recall, f1, accuracy = precision_recall_f1_acc(preds_np, gts_np)
+                    orig_crop = img_tensor[0, :, top:bottom, left:right]
+                    orig_crop_np = (orig_crop.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+                    orig_crop_np = orig_crop_np[:bottom - top, :right - left, :]
 
-    return {
-        "mIoU": float(miou),
-        "ClassIoU": class_ious,
-        "Accuracy": float(accuracy),
-        "Precision": float(precision),
-        "Recall": float(recall),
-        "F1": float(f1),
-    }
+                    pred_color = np.stack([pred_crop_bin[:bottom - top, :right - left]] * 3, axis=-1)
+                    compare = np.concatenate([orig_crop_np, pred_color], axis=1)
+                    compare_pil = Image.fromarray(compare)
+                    compare_pil.save(os.path.join(save_blocks_dir, f"compare_{block_idx}_{top}_{left}.png"))
+
+                block_idx += 1
+
+                final_mask[top:bottom, left:right] = np.maximum(
+                    final_mask[top:bottom, left:right],
+                    pred_crop_bin[:bottom - top, :right - left]
+                )
+
+    return final_mask
 
 
 def main():
-    args = parse_args()
-    set_reproducibility(args.seed)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--image', type=str, required=True, help='输入图像路径')
+    parser.add_argument('--weight', type=str, required=True, help='模型权重路径')
+    parser.add_argument('--backbone', type=str, default='resnet101')
+    parser.add_argument('--crop-size', type=int, default=448)
+    parser.add_argument('--overlap', type=float, default=0.2)
+    parser.add_argument('--save-dir', type=str, default='results/single_prediction')
+    parser.add_argument('--roi', type=int, nargs=4, metavar=('x1', 'y1', 'x2', 'y2'),
+                        default=None, help='仅在指定 ROI 区域滑窗预测')
+    parser.add_argument('--save-blocks-dir', type=str, default='roi_blocks', help='保存每个滑窗掩码和对比图的目录')
+    parser.add_argument('--output-file', type=str, default='crack_results.txt',
+                        help='保存裂缝数量、长度和宽度的文本文件')
+    args = parser.parse_args()
 
-    size = tuple(args.crop_size)
+    os.makedirs(args.save_dir, exist_ok=True)
+    if args.save_blocks_dir:
+        os.makedirs(args.save_blocks_dir, exist_ok=True)
 
-    train_img_dir = os.path.join(args.data_root, "train", "images")
-    train_mask_dir = os.path.join(args.data_root, "train", "masks")
-    val_img_dir = os.path.join(args.data_root, "val", "images")
-    val_mask_dir = os.path.join(args.data_root, "val", "masks")
+    # === 加载模型 ===
+    model = CrackNex(backbone=args.backbone)
+    model.load_state_dict(torch.load(args.weight, map_location='cuda'), strict=False)
+    model = model.cuda().eval()
 
-    for p in [train_img_dir, train_mask_dir, val_img_dir, val_mask_dir]:
-        if not os.path.isdir(p):
-            raise FileNotFoundError(f"Required directory not found: {p}")
+    # === 加载图像 ===
+    img_tensor, orig_pil = load_image(args.image)
+    img_tensor = img_tensor.cuda()
+    orig_np = np.array(orig_pil.convert("RGB"))
 
-    # IMPORTANT:
-    # - Training randomness changes with args.seed.
-    # - Validation input itself must remain fixed across runs.
-    #   The accompanying transform.py makes val_transform deterministic.
-    trainset = CrackDataset(
-        train_img_dir, train_mask_dir,
-        size=size, mode="train", seed=args.seed
-    )
-    valset = CrackDataset(
-        val_img_dir, val_mask_dir,
-        size=size, mode="val", seed=None
-    )
-
-    generator = torch.Generator()
-    generator.manual_seed(args.seed)
-
-    trainloader = DataLoader(
-        trainset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        pin_memory=True,
-        num_workers=args.num_workers,
-        worker_init_fn=seed_worker if args.num_workers > 0 else None,
-        generator=generator,
-    )
-    valloader = DataLoader(
-        valset,
-        batch_size=1,
-        shuffle=False,
-        pin_memory=True,
-        num_workers=args.num_workers,
-        worker_init_fn=seed_worker if args.num_workers > 0 else None,
-    )
-
-    model = MLiteUNet(
-        n_classes=2,
-        aux_mode="train",
-        pretrained_backbone=False
-    ).cuda()
-
-    print(f"Dataset: {args.dataset}")
-    print(f"Seed: {args.seed}")
-    print(f"Epochs: {args.epochs}")
-    print(f"Total Parameters: {count_params(model):.2f} M")
-
-    model = DataParallel(model).cuda()
-
-    criterion = CombinedLoss()
-    optimizer = AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay
-    )
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
-
-    checkpoint_dir = Path(args.checkpoint_root) / args.dataset / f"seed_{args.seed}"
-    result_dir = Path(args.result_root) / args.dataset / f"seed_{args.seed}"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    result_dir.mkdir(parents=True, exist_ok=True)
-
-    best_weight_path = checkpoint_dir / "best_mIoU.pth"
-    csv_path = result_dir / "train_metrics.csv"
-    log_path = result_dir / "train.log"
-
-    headers = [
-        "Epoch", "Loss", "mIoU", "Accuracy",
-        "Precision", "Recall", "F1", "LearningRate"
-    ]
-
-    best_miou = -1.0
-    best_epoch = -1
-
-    with open(csv_path, "w", newline="", encoding="utf-8") as csvfile, \
-         open(log_path, "w", encoding="utf-8") as logfile:
-
-        writer = csv.writer(csvfile)
-        writer.writerow(headers)
-
-        logfile.write(f"Dataset: {args.dataset}\n")
-        logfile.write(f"Seed: {args.seed}\n")
-        logfile.write(f"Epochs: {args.epochs}\n")
-        logfile.write(f"Batch size: {args.batch_size}\n")
-        logfile.write(f"Learning rate: {args.lr}\n")
-        logfile.write(f"Weight decay: {args.weight_decay}\n\n")
-
-        for epoch in range(1, args.epochs + 1):
-            model.train()
-            total_loss = 0.0
-
-            tbar = tqdm(
-                enumerate(trainloader),
-                total=len(trainloader),
-                desc=f"{args.dataset} seed={args.seed} epoch={epoch}/{args.epochs}"
-            )
-
-            for i, (img, mask) in tbar:
-                img = img.cuda(non_blocking=True)
-                mask = mask.cuda(non_blocking=True)
-
-                output, out_s3, out_s4, out_s5 = model(img)
-
-                # Correct multi-scale deep supervision:
-                # main output + three genuine auxiliary outputs.
-                loss1 = criterion(output, mask)
-                loss2 = criterion(out_s3, mask)
-                loss3 = criterion(out_s4, mask)
-                loss4 = criterion(out_s5, mask)
-
-                loss = (
-                    0.5 * loss1
-                    + 0.2 * loss2
-                    + 0.2 * loss3
-                    + 0.1 * loss4
-                )
-
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
-
-                total_loss += loss.item()
-                tbar.set_postfix(loss=f"{total_loss / (i + 1):.4f}")
-
-            metrics = evaluate(model, valloader)
-            current_lr = optimizer.param_groups[0]["lr"]
-
-            writer.writerow([
-                epoch,
-                total_loss / len(trainloader),
-                metrics["mIoU"],
-                metrics["Accuracy"],
-                metrics["Precision"],
-                metrics["Recall"],
-                metrics["F1"],
-                current_lr,
-            ])
-            csvfile.flush()
-
-            logfile.write(
-                f"Epoch {epoch:03d} | "
-                f"Loss={total_loss / len(trainloader):.6f} | "
-                f"mIoU={metrics['mIoU']:.6f} | "
-                f"Precision={metrics['Precision']:.6f} | "
-                f"Recall={metrics['Recall']:.6f} | "
-                f"F1={metrics['F1']:.6f} | "
-                f"Accuracy={metrics['Accuracy']:.6f} | "
-                f"LR={current_lr:.8f}\n"
-            )
-            logfile.flush()
-
-            # Use one fixed model-selection rule for every run:
-            # best validation mIoU.
-            if metrics["mIoU"] > best_miou:
-                best_miou = metrics["mIoU"]
-                best_epoch = epoch
-                torch.save(model.module.state_dict(), best_weight_path)
-
-                print(
-                    f"Best checkpoint updated: epoch={best_epoch}, "
-                    f"val mIoU={best_miou:.6f} -> {best_weight_path}"
-                )
-
-            scheduler.step()
-
-        logfile.write(
-            f"\nTraining complete. Best epoch={best_epoch}, "
-            f"Best validation mIoU={best_miou:.6f}\n"
+    # === 滑窗预测（是否启用 ROI） ===
+    if args.roi:
+        x1, y1, x2, y2 = args.roi
+        print(f"ROI 限定区域: 左上({x1},{y1})，右下({x2},{y2})")
+        pred_mask_np = sliding_window_predict_roi(
+            model, img_tensor,
+            roi_coords=(x1, y1, x2, y2),
+            window_size=args.crop_size, overlap=args.overlap,
+            save_blocks_dir=args.save_blocks_dir
+        )
+    else:
+        pred_mask_np = sliding_window_predict_roi(
+            model, img_tensor,
+            roi_coords=(0, 0, img_tensor.shape[3], img_tensor.shape[2]),
+            window_size=args.crop_size, overlap=args.overlap,
+            save_blocks_dir=args.save_blocks_dir
         )
 
-    print("\nTraining complete")
-    print(f"Dataset: {args.dataset}")
-    print(f"Seed: {args.seed}")
-    print(f"Best epoch: {best_epoch}")
-    print(f"Best validation mIoU: {best_miou:.6f}")
-    print(f"Checkpoint: {best_weight_path}")
-    print(f"Training log: {log_path}")
-    print(f"Training CSV: {csv_path}")
+    # === 保存掩码图像 ===
+    basename = os.path.splitext(os.path.basename(args.image))[0]
+    pred_path = os.path.join(args.save_dir, f"pred_{basename}.png")
+    Image.fromarray(pred_mask_np).save(pred_path)
+
+    # === 绘制蓝色覆盖裂缝区域 ===
+    overlay_img = orig_np.copy()
+    overlay_img[pred_mask_np > 0] = [0, 0, 255]  # 蓝色覆盖裂缝
+    overlay_path = os.path.join(args.save_dir, f"overlay_{basename}.png")
+    Image.fromarray(overlay_img).save(overlay_path)
+
+    # === 计算裂缝长度、宽度、数量 + 获得编号图 ===
+    crack_length, crack_width, crack_count, labeled_mask = process_predictions(pred_mask_np)
+
+    # === 在覆盖图上叠加编号（1..N） ===
+    # 计算每个连通域的质心并绘制编号
+    overlay_numbered = overlay_img.copy()
+    h, w = labeled_mask.shape
+    for label_id in range(1, crack_count + 1):
+        ys, xs = np.where(labeled_mask == label_id)
+        if ys.size == 0:
+            continue
+        cy = int(ys.mean())
+        cx = int(xs.mean())
+        # 画一点小圆心增强可见性
+        cv2.circle(overlay_numbered, (cx, cy), 4, (255, 255, 255), -1)
+        # 写编号
+        cv2.putText(overlay_numbered, str(label_id), (cx + 6, cy - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+
+    overlay_numbered_path = os.path.join(args.save_dir, f"overlay_numbered_{basename}.png")
+    Image.fromarray(overlay_numbered).save(overlay_numbered_path)
+
+    # === 输出计算结果 ===
+    print(f"裂缝数量: {crack_count}")
+    print(f"裂缝长度: {crack_length}")
+    print(f"裂缝宽度: {crack_width}")
+    print(f"编号可视化已保存: {overlay_numbered_path}")
+
+    # === 保存裂缝数据到文本文件（逐条对应编号-长度-宽度） ===
+    output_file = os.path.join(args.save_dir, args.output_file)
+    with open(output_file, 'w') as f:
+        f.write(f"裂缝数量: {crack_count}\n")
+        f.write("编号, 长度(像素), 宽度(像素, 距离变换最大值)\n")
+        for i, (L, W) in enumerate(zip(crack_length, crack_width), start=1):
+            f.write(f"{i}, {L}, {W:.4f}\n")
+
+    # 同时保留原有提示
+    print(f"✅ 预测完成：\n- 掩码图：{pred_path}\n- 覆盖图：{overlay_path}\n- 编号覆盖图：{overlay_numbered_path}\n- 裂缝数据：{output_file}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
+
+
+# 第一段代码：专注于单张图像的裂缝检测，计算和保存裂缝的长度与宽度。
+# 第二段代码：支持批量处理和滑窗预测，适用于大图像，计算裂缝的数量和特征。
+# 第三段代码：与第二段相似，但使用不同的细化算法，强调裂缝的骨架化处理。
+

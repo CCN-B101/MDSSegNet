@@ -257,7 +257,34 @@ class FusionBlock(nn.Module):
 class SegHead(nn.Module):
     def __init__(self, in_c, mid_c, n_classes):
         super().__init__()
-        self.conv = w�h��춻�q�^wHeads
+        self.conv = ConvBNReLU(in_c, mid_c, 3, 1, 1)
+        self.drop = nn.Dropout(0.1)
+        self.out = nn.Conv2d(mid_c, n_classes, 1)
+
+    def forward(self, x, size=None):
+        x = self.out(self.drop(self.conv(x)))
+        if size is not None:
+            x = F.interpolate(x, size=size, mode='bilinear', align_corners=False)
+        return x
+
+
+# -------------------------------------------------------------
+# MBiSeNetLite UNet-style (Context 输出为 ls1..ls4，无语义内融合)
+# -------------------------------------------------------------
+class MLiteUNet(nn.Module):
+    def __init__(self, n_classes=2, aux_mode='train', pretrained_backbone=True):
+        super().__init__()
+        self.aux_mode = aux_mode
+        self.detail = DetailBranch()
+        self.context = ContextBranch(pretrained=pretrained_backbone)
+
+        # Fusion blocks (UNet-style)
+        self.fuse_s5 = FusionBlock(128, 128, 256)  # detail=128, context=128, out=256
+        self.fuse_s4 = FusionBlock(128, 128, 256)
+        self.fuse_s3 = FusionBlock(128, 128, 256)
+        self.fuse_s2 = FusionBlock(128, 128, 256)
+
+        # SegHeads
         self.head_s5 = SegHead(256, 128, n_classes)
         self.head_s4 = SegHead(256, 128, n_classes)
         self.head_s3 = SegHead(256, 128, n_classes)
