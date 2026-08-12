@@ -26,8 +26,7 @@ jobs:
           mkdir -p checkpoints
           gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "Crack500_best_mIoU.pth" --dir checkpoints --clobber
           gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "CTC_best_mIoU.pth" --dir checkpoints --clobber
-          gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "DeepCrack_best_0.9031.pth" --dir checkpoints --clobber
-          mv checkpoints/DeepCrack_best_0.9031.pth checkpoints/DeepCrack_best_mIoU.pth
+          gh release download weights-v1.0 --repo "${{ github.repository }}" --pattern "DeepCrack_best_mIoU.pth" --dir checkpoints --clobber
 
       - name: Verify file integrity
         run: |
