@@ -43,3 +43,9 @@ logs/
 *.swp
 *~
 
+
+# Published pretrained weights kept in this repository
+!checkpoints/
+!checkpoints/Crack500_best_mIoU.pth
+!checkpoints/CTC_best_mIoU.pth
+!checkpoints/DeepCrack_best_mIoU.pth
