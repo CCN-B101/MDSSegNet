@@ -78,6 +78,12 @@ Each image and its segmentation mask use the same filename stem. Point the corre
 
 Pretrained MDSSegNet weights are available in the repository's `checkpoints/` directory. Select the checkpoint matching the dataset being evaluated and pass its path through the checkpoint argument used by the relevant script.
 
+## Project showcase
+
+The following example compares the original specimen image, the reference crack annotation, and the MDSSegNet prediction overlay.
+
+![MDSSegNet crack segmentation result](assets/project-showcase.png)
+
 ## Citation
 
 Citation information will be added after publication.
