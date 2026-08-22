@@ -127,9 +127,9 @@ def generate_error_map(gt_path, pred_path, save_dir, prefix="result"):
 if __name__ == "__main__":
     # ======= 你只需要修改这里的路径 =======
 
-    gt_path = r"C:\Users\15176\Desktop\error\ctc\truth.png"                # Ground Truth mask
-    pred_path = r"C:\Users\15176\Desktop\error\ctc\mds.png"     # 预测 mask（比如MDSSegNet）
-    save_dir = r"C:\Users\15176\Desktop\error\ctc"
+    gt_path = r"./examples/test_image.jpg/truth.png"     # Ground Truth mask
+    pred_path = r"./examples/test_image.jpg/mds.png"     # 预测 mask（比如MDSSegNet）
+    save_dir = r"./results"
     prefix = "MDSSegNet"
 
     generate_error_map(gt_path, pred_path, save_dir, prefix)

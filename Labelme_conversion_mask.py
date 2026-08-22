@@ -90,8 +90,8 @@ def batch_convert_masks(input_dir, image_extension='.jpg'):
 # ==== 示例用法 ====
 if __name__ == '__main__':
     # 单个文件转换示例
-    json_file = 'C:\\Users\\15176\\Desktop\\crack\\0020.json'  # 你的 LabelMe JSON 文件路径
-    img_path = 'C:\\Users\\15176\\Desktop\\crack\\0020.jpg'  # 原始图像路径
+    json_file = './examples/.json'  # 你的 LabelMe JSON 文件路径
+    img_path = './examples/test_image.jpg'  # 原始图像路径
 
     # 生成掩膜图像
     mask = create_mask_from_json(json_file, img_path)
@@ -101,6 +101,4 @@ if __name__ == '__main__':
     mask_output_path = os.path.join(img_dir, 'mask.png')
     save_mask_as_image(mask, mask_output_path)
     
-    # 批量转换示例
-    # input_dir = 'C:\\Users\\Administrator\\Desktop\\Ctc\\1'  # 包含图像和JSON文件的目录
-    # batch_convert_masks(input_dir)
+

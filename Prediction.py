@@ -5,7 +5,7 @@ from PIL import Image
 import argparse
 import cv2
 
-from model.cracknex import CrackNex  # 使用你的模型结构定义文件路径
+from model.ML_Mutil import MLiteUNet  # 使用 MLiteUNet 模型
 import torch.nn.functional as F
 from torchvision.transforms import ToTensor, Compose
 import torchvision.transforms.functional as TF
@@ -24,18 +24,29 @@ def normalize_only_img(img):
 
 # === 加载图像并归一化 ===
 def load_image(path):
-    img = Image.open(path)  # 不进行 convert('RGB')，保留原始图像格式
+    img = Image.open(path).convert('RGB')  # 统一转换为 RGB
     transform = Compose([
         normalize_only_img
     ])
     tensor = transform(img).unsqueeze(0)
-    return tensor, img  # 返回原始图像（不转换为 RGB）
+    return tensor, img  # 返回原始图像
 
 
 # === 滑窗预测函数，限制 ROI 范围 ===
-# 在原代码的基础上进行修改
 def sliding_window_predict_roi(model, img_tensor, roi_coords, window_size=448, overlap=0.2, cls=1,
-                               save_blocks_dir=None):
+                               save_blocks_dir=None, threshold=0.5):
+    """
+    滑窗预测函数
+    Args:
+        model: MLiteUNet 模型
+        img_tensor: 输入图像张量 [1, 3, H, W]
+        roi_coords: ROI区域坐标 (x1, y1, x2, y2)
+        window_size: 滑窗大小
+        overlap: 重叠率
+        cls: 目标类别索引（裂缝类别）
+        save_blocks_dir: 保存滑窗结果的目录
+        threshold: 二值化阈值
+    """
     _, _, H, W = img_tensor.shape
     x1, y1, x2, y2 = roi_coords
     roi_w, roi_h = x2 - x1, y2 - y1
@@ -59,11 +70,29 @@ def sliding_window_predict_roi(model, img_tensor, roi_coords, window_size=448, o
                 if pad_bottom > 0 or pad_right > 0:
                     crop = F.pad(crop, (0, pad_right, 0, pad_bottom), mode="constant", value=0)
 
-                # 仅使用查询图像进行推理
-                pred = model(crop)  # 模型的前向推理
-                pred = torch.argmax(pred, dim=1)
-                pred_crop = pred[:, :bottom - top, :right - left].squeeze(0).cpu().numpy()
-                pred_crop_bin = (pred_crop == cls).astype(np.uint8) * 255
+                # 模型推理
+                output = model(crop)  # MLiteUNet 输出
+
+                # 处理输出：如果是元组（训练模式），取第一个作为主输出
+                if isinstance(output, tuple):
+                    output = output[0]  # 主输出是 out_s2
+
+                # 使用 sigmoid 将输出映射到 [0,1] 范围
+                output_prob = torch.sigmoid(output)
+
+                # 二值化：大于阈值视为裂缝
+                pred_binary = (output_prob > threshold).float()
+
+                # 提取指定类别的预测结果
+                if pred_binary.shape[1] > 1:  # 多分类情况，取指定类别
+                    pred_crop = pred_binary[:, cls:cls + 1, :, :]  # 提取指定类别
+                else:  # 二分类情况
+                    pred_crop = pred_binary
+
+                # 裁剪到原始大小（去除padding）
+                pred_crop = pred_crop[:, :, :bottom - top, :right - left]
+                pred_crop_np = pred_crop.squeeze(0).squeeze(0).cpu().numpy()
+                pred_crop_bin = (pred_crop_np * 255).astype(np.uint8)
 
                 # 保存单独的mask
                 if save_blocks_dir:
@@ -75,7 +104,7 @@ def sliding_window_predict_roi(model, img_tensor, roi_coords, window_size=448, o
                     orig_crop_np = (orig_crop.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
                     orig_crop_np = orig_crop_np[:bottom - top, :right - left, :]
 
-                    # 创建黑白掩码
+                    # 创建彩色掩码
                     pred_color = np.stack([pred_crop_bin[:bottom - top, :right - left]] * 3, axis=-1)
 
                     # 拼接原图裁剪部分（彩色）和预测结果（黑白掩膜）
@@ -95,25 +124,54 @@ def sliding_window_predict_roi(model, img_tensor, roi_coords, window_size=448, o
 
 # === 主程序入口 ===
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description='MLiteUNet sliding window prediction')
     parser.add_argument('--image', type=str, required=True, help='输入图像路径')
     parser.add_argument('--weight', type=str, required=True, help='模型权重路径')
-    parser.add_argument('--backbone', type=str, default='resnet101')
-    parser.add_argument('--crop-size', type=int, default=448)
-    parser.add_argument('--overlap', type=float, default=0.2)
-    parser.add_argument('--save-dir', type=str, default='results/single_prediction')
+    parser.add_argument('--crop-size', type=int, default=448, help='滑窗大小')
+    parser.add_argument('--overlap', type=float, default=0.2, help='滑窗重叠率')
+    parser.add_argument('--threshold', type=float, default=0.5, help='二值化阈值 (0-1)')
+    parser.add_argument('--save-dir', type=str, default='results/single_prediction', help='保存预测结果的目录')
+    parser.add_argument('--n-classes', type=int, default=2, help='分类数量')
+    parser.add_argument('--class-idx', type=int, default=1, help='目标类别索引（裂缝类别）')
+    parser.add_argument('--pretrained-backbone', action='store_true', default=False, help='是否使用预训练骨干网络')
     parser.add_argument('--roi', type=int, nargs=4, metavar=('x1', 'y1', 'x2', 'y2'),
                         default=None, help='仅在指定 ROI 区域滑窗预测')
     parser.add_argument('--save-blocks-dir', type=str, default='roi_blocks', help='保存每个滑窗掩码和对比图的目录')
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
-    os.makedirs(args.save_blocks_dir, exist_ok=True)
+    if args.save_blocks_dir:
+        os.makedirs(args.save_blocks_dir, exist_ok=True)
 
     # === 加载模型 ===
-    model = CrackNex(backbone=args.backbone)
-    model.load_state_dict(torch.load(args.weight, map_location='cuda'), strict=False)
+    print(f"Loading MLiteUNet model with n_classes={args.n_classes}...")
+    model = MLiteUNet(
+        n_classes=args.n_classes,
+        aux_mode='eval',  # 评估模式，只返回主输出
+        pretrained_backbone=args.pretrained_backbone
+    )
+
+    # 加载权重
+    if torch.cuda.is_available():
+        state_dict = torch.load(args.weight, map_location='cuda')
+    else:
+        state_dict = torch.load(args.weight, map_location='cpu')
+
+    # 处理权重加载（兼容不同的保存格式）
+    if 'state_dict' in state_dict:
+        state_dict = state_dict['state_dict']
+    elif 'model' in state_dict:
+        state_dict = state_dict['model']
+
+    # 加载权重，忽略不匹配的键
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+    if missing_keys:
+        print(f"Warning: Missing keys: {missing_keys[:5]}...")
+    if unexpected_keys:
+        print(f"Warning: Unexpected keys: {unexpected_keys[:5]}...")
+
     model = model.cuda().eval()
+    print("Model loaded successfully!")
 
     # === 加载图像 ===
     img_tensor, orig_pil = load_image(args.image)
@@ -127,15 +185,22 @@ def main():
         pred_mask_np = sliding_window_predict_roi(
             model, img_tensor,
             roi_coords=(x1, y1, x2, y2),
-            window_size=args.crop_size, overlap=args.overlap,
-            save_blocks_dir=args.save_blocks_dir  # 保存每个滑窗的掩码和对比图
+            window_size=args.crop_size,
+            overlap=args.overlap,
+            cls=args.class_idx,
+            threshold=args.threshold,
+            save_blocks_dir=args.save_blocks_dir
         )
     else:
+        print("预测全图...")
         pred_mask_np = sliding_window_predict_roi(
             model, img_tensor,
             roi_coords=(0, 0, img_tensor.shape[3], img_tensor.shape[2]),
-            window_size=args.crop_size, overlap=args.overlap,
-            save_blocks_dir=args.save_blocks_dir  # 保存每个滑窗的掩码和对比图
+            window_size=args.crop_size,
+            overlap=args.overlap,
+            cls=args.class_idx,
+            threshold=args.threshold,
+            save_blocks_dir=args.save_blocks_dir
         )
 
     # === 保存掩码图像 ===
@@ -155,7 +220,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
