@@ -62,7 +62,7 @@ After downloading, extract the archive so that the dataset has the following str
 ```text
 CTC/
 ├── train/
-│   ├── images/                      # 2,080 JPG images (+ one JSON metadata file)
+│   ├── images/                      # 2,080 JPG images
 │   └── masks/                       # 2,080 PNG segmentation masks
 ├── val/
 │   ├── images/                      # 260 JPG images
