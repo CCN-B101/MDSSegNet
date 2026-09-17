@@ -52,8 +52,8 @@ Before running them, update local dataset, checkpoint, input, and output paths a
 The CTC dataset is the custom concrete-crack segmentation dataset prepared for the MDSSegNet study. It contains **2,600 image-mask pairs** and is supplied with fixed 80/10/10 training, validation, and test splits.
 
 - **Download:** [CTC_dataset.zip (Google Drive)](https://drive.google.com/file/d/16t8wOdmIq4y_H5ol-ApG__UVxLqNLof8/view?usp=sharing)
-- **Archive size:** 71.2 MB
-- **SHA-256:** `9933B7598833EC82DC6374F5CD3468DC4EF16D336E6D33FC5B4DC66A64B069BA`
+- **Archive size:** 71.6 MB
+- **SHA-256:** `458B30CC4D5E22DED8ED09E3372B310A1D75E8478C0FFFEA02A9BB2FFC827FDD`
 - **Source:** Custom dataset prepared for the MDSSegNet study; see the [MDSSegNet manuscript record](https://ssrn.com/abstract=6549934).
 - **License and permitted use:** No separate open-source license is included with the dataset. It is shared for academic research use. For other uses or redistribution, please contact the authors.
 
